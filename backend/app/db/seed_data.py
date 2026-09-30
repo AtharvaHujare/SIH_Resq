@@ -141,6 +141,7 @@ def seed_database():
         # Map district names to district IDs
         district_lookup = {d["name"]: d["id"] for d in DISTRICT_PROFILES}
         district_lookup.update({
+            "Guwahati": "DIST_GUW",
             "Raigad": "DIST_01",
             "Pune": "DIST_02",
             "Ratnagiri": "DIST_03",

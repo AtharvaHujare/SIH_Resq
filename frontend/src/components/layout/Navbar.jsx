@@ -43,33 +43,62 @@ export default function Navbar({
           {isSidebarOpen ? <X size={19} /> : <Menu size={19} />}
         </button>
 
-        <img src="/logo.svg" alt="SIH PS 191 Emblem" />
+        {/* Clean, Professional RESQ Vector Emblem */}
+        <img
+          src="/logo.svg"
+          alt="RESQ Emergency Relocation & Decision Support System"
+          style={{ width: '36px', height: '36px', display: 'block', flexShrink: 0 }}
+        />
 
         <div className="nav-brand-text">
-          <div className="brand-title">
-            <span>Intelligent GIS Proactive Relocation DSS</span>
-            <span className="brand-badge">SIH PS 191</span>
+          <div className="brand-title" style={{ display: 'flex', alignItems: 'center', gap: '8px', lineHeight: 1.2 }}>
+            <span style={{ fontSize: '1.25rem', fontWeight: 800, letterSpacing: '0.04em', color: '#0f172a' }}>
+              RESQ
+            </span>
+            <span
+              className="brand-badge"
+              style={{
+                fontSize: '0.66rem',
+                fontWeight: 700,
+                background: '#eff6ff',
+                color: '#1d4ed8',
+                border: '1px solid #bfdbfe',
+                padding: '1px 6px',
+                borderRadius: '12px',
+                letterSpacing: '0.03em'
+              }}
+            >
+              DSS
+            </span>
           </div>
-          <span className="brand-subtitle">State Disaster Management Authority • Proactive Resettlement Command</span>
+          <span
+            className="brand-subtitle"
+            style={{
+              fontSize: '0.72rem',
+              color: '#64748b',
+              fontWeight: 500,
+              whiteSpace: 'nowrap',
+              lineHeight: 1.2
+            }}
+          >
+            Intelligent Disaster Relocation &amp; Decision Support System
+          </span>
         </div>
       </div>
 
       {/* Center & Right Controls */}
       <div className="nav-controls">
-        {/* District / Region Selector */}
+        {/* City Selector */}
         <div className="region-selector">
           <MapPin size={15} color="var(--gis-blue)" />
           <select
             value={currentDistrict}
             onChange={(e) => onDistrictChange(e.target.value)}
-            aria-label="Select Target District"
+            aria-label="Select City"
           >
-            <option value="All">All Monitored Regions (Macro View)</option>
-            {DISTRICT_PROFILES.map((dist) => (
-              <option key={dist.id} value={dist.name.split(' ')[0]}>
-                {dist.name} ({dist.criticalCount} Red Zones)
-              </option>
-            ))}
+            <option value="Guwahati">Guwahati (Default Demo City)</option>
+            <option value="Pune">Pune (Ghat Corridor)</option>
+            <option value="Raigad">Raigad (Coastal Corridor)</option>
           </select>
         </div>
 

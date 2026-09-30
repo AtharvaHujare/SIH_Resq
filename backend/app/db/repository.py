@@ -25,7 +25,14 @@ from backend.app.models.orm_models import (
     CandidateRelocationSite,
     RedZone,
     SystemAlert,
+    DataSource,
+    DataIngestionRun,
+    WeatherObservation,
+    RainfallObservation,
+    HazardEvent,
+    InfrastructureFeature,
 )
+from backend.app.services.capacity_engine import capacity_engine
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +139,12 @@ def _site_to_dict(s: CandidateRelocationSite) -> Dict[str, Any]:
         "capacityMetrics": {
             "allocatedPopulation": s.allocated_population,
             "maximumAbsorption": s.maximum_absorption,
+            "grossCapacity": int(s.usable_area_sqm / 45.0) if s.usable_area_sqm and s.usable_area_sqm > 0 else s.estimated_capacity,
+            "feasibleCapacity": s.estimated_capacity,
+            "limitingFactor": "Potable Water Supply (CPHEEO 135 LPD)" if (float(s.potable_water_daily_supplied_kl or 0) * 1000.0 / 135.0) < (s.usable_area_sqm / 45.0 if s.usable_area_sqm else s.estimated_capacity) else "Land Area & Topography (45 m²/person)",
+            "landCapacity": int(s.usable_area_sqm / 45.0) if s.usable_area_sqm and s.usable_area_sqm > 0 else s.estimated_capacity,
+            "waterCapacity": int(float(s.potable_water_daily_supplied_kl) * 1000.0 / 135.0) if s.potable_water_daily_supplied_kl and float(s.potable_water_daily_supplied_kl) > 0 else None,
+            "healthCapacity": (s.hospital_beds_available * 500) if s.hospital_beds_available is not None else None,
             "remainingCapacity": s.remaining_capacity,
             "utilizationPercent": float(s.utilization_percent),
             "potableWaterDailyNeededKl": float(s.potable_water_daily_needed_kl),
@@ -181,6 +194,14 @@ def _alert_to_dict(a: SystemAlert) -> Dict[str, Any]:
     }
 
 
+def _normalize_district(district: Optional[str]) -> Optional[str]:
+    """Normalize district query by stripping UI labels like '(Primary Demo)' or '(Ghat Region)'."""
+    if not district or district.strip().lower() == "all":
+        return None
+    cleaned = district.split("(")[0].strip()
+    return cleaned if cleaned else district.strip()
+
+
 class DataRepository:
     """Repository abstraction layer.
     Features:
@@ -218,11 +239,12 @@ class DataRepository:
     # ==========================================================================
     def get_kpis(self, district: Optional[str] = None) -> Dict[str, Any]:
         """Fetch headline KPI summary metrics with optimized single-roundtrip aggregation."""
+        clean_dist = _normalize_district(district)
         if self.is_db_enabled:
             try:
                 engine = get_engine()
                 with Session(engine) as session:
-                    filter_district = bool(district and district.lower() != "all")
+                    filter_district = bool(clean_dist)
                     hab_filter = "WHERE district_name ILIKE :dist" if filter_district else ""
                     hab_and = "AND district_name ILIKE :dist" if filter_district else ""
                     site_filter = "WHERE district_name ILIKE :dist" if filter_district else ""
@@ -238,7 +260,7 @@ class DataRepository:
                             (SELECT coalesce(avg(suitability_score), 87.4) FROM candidate_relocation_sites {site_filter}) as avg_suitability,
                             (SELECT count(*) FROM districts) as total_districts
                     """)
-                    params = {"dist": f"%{district}%"} if filter_district else {}
+                    params = {"dist": f"%{clean_dist}%"} if filter_district else {}
                     row = session.execute(sql, params).mappings().first()
 
                     total_habs = int(row["total_habs"])
@@ -316,14 +338,15 @@ class DataRepository:
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
         """Query habitations with multi-criteria filtering and sorting."""
+        clean_dist = _normalize_district(district)
         if self.is_db_enabled:
             try:
                 engine = get_engine()
                 with Session(engine) as session:
                     stmt = select(Habitation).options(selectinload(Habitation.ai_factors))
 
-                    if district and district.lower() != "all":
-                        stmt = stmt.where(Habitation.district_name.ilike(f"%{district}%"))
+                    if clean_dist:
+                        stmt = stmt.where(Habitation.district_name.ilike(f"%{clean_dist}%"))
 
                     if risk_tier and risk_tier.lower() != "all":
                         stmt = stmt.where(Habitation.risk_tier.ilike(risk_tier))
@@ -388,8 +411,9 @@ class DataRepository:
     ) -> List[Dict[str, Any]]:
         result = deepcopy(VULNERABLE_HABITATIONS)
 
-        if district and district.lower() != "all":
-            result = [h for h in result if district.lower() in h["district"].lower()]
+        clean_dist = _normalize_district(district)
+        if clean_dist:
+            result = [h for h in result if clean_dist.lower() in h["district"].lower()]
 
         if risk_tier and risk_tier.lower() != "all":
             result = [h for h in result if h["riskTier"].lower() == risk_tier.lower()]
@@ -455,14 +479,15 @@ class DataRepository:
         min_capacity: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """Query candidate safe relocation parcels with filtering."""
+        clean_dist = _normalize_district(district)
         if self.is_db_enabled:
             try:
                 engine = get_engine()
                 with Session(engine) as session:
                     stmt = select(CandidateRelocationSite)
 
-                    if district and district.lower() != "all":
-                        stmt = stmt.where(CandidateRelocationSite.district_name.ilike(f"%{district}%"))
+                    if clean_dist:
+                        stmt = stmt.where(CandidateRelocationSite.district_name.ilike(f"%{clean_dist}%"))
 
                     if min_suitability is not None and float(min_suitability) > 0:
                         stmt = stmt.where(CandidateRelocationSite.suitability_score >= float(min_suitability))
@@ -505,8 +530,9 @@ class DataRepository:
     ) -> List[Dict[str, Any]]:
         result = deepcopy(CANDIDATE_RELOCATION_SITES)
 
-        if district and district.lower() != "all":
-            result = [s for s in result if district.lower() in s["district"].lower()]
+        clean_dist = _normalize_district(district)
+        if clean_dist:
+            result = [s for s in result if clean_dist.lower() in s["district"].lower()]
 
         if min_suitability is not None and float(min_suitability) > 0:
             result = [s for s in result if s["suitabilityScore"] >= float(min_suitability)]
@@ -553,13 +579,41 @@ class DataRepository:
     # ==========================================================================
     def get_red_zones(self, district: Optional[str] = None) -> List[Dict[str, Any]]:
         """Retrieve delineated high-risk Red Zone polygons."""
+        clean_dist = _normalize_district(district)
         if self.is_db_enabled:
             try:
                 engine = get_engine()
                 with Session(engine) as session:
                     stmt = select(RedZone)
-                    if district and district.lower() != "all":
-                        stmt = stmt.where(RedZone.name.ilike(f"%{district}%"))
+                    if clean_dist:
+                        d = clean_dist.lower()
+                        if d == "guwahati":
+                            stmt = stmt.where(or_(
+                                RedZone.id.ilike("RZ_GUW%"),
+                                RedZone.name.ilike("%guwahati%"),
+                                RedZone.name.ilike("%brahmaputra%"),
+                                RedZone.name.ilike("%kharghuli%"),
+                                RedZone.name.ilike("%noonmati%"),
+                                RedZone.name.ilike("%pandu%")
+                            ))
+                        elif d == "pune":
+                            stmt = stmt.where(or_(
+                                RedZone.id.ilike("RZ_PUN%"),
+                                RedZone.name.ilike("%pune%"),
+                                RedZone.name.ilike("%malin%"),
+                                RedZone.name.ilike("%ambegaon%")
+                            ))
+                        elif d == "raigad":
+                            stmt = stmt.where(or_(
+                                RedZone.id.ilike("RZ_00%"),
+                                RedZone.name.ilike("%raigad%"),
+                                RedZone.name.ilike("%taliye%"),
+                                RedZone.name.ilike("%varandha%"),
+                                RedZone.name.ilike("%savitri%"),
+                                RedZone.name.ilike("%mahad%")
+                            ))
+                        else:
+                            stmt = stmt.where(RedZone.name.ilike(f"%{clean_dist}%"))
                     stmt = stmt.order_by(RedZone.name.asc())
                     red_zones = session.scalars(stmt).all()
                     self._last_source = "supabase"
@@ -570,8 +624,16 @@ class DataRepository:
                 self._last_source = "mock_fallback"
 
         result = deepcopy(RED_ZONES)
-        if district and district.lower() != "all":
-            result = [r for r in result if district.lower() in r["name"].lower()]
+        if clean_dist:
+            d = clean_dist.lower()
+            if d == "guwahati":
+                result = [r for r in result if r.get("district", "").lower() == "guwahati" or r.get("id", "").startswith("RZ_GUW") or any(k in r["name"].lower() for k in ["brahmaputra", "kharghuli", "noonmati", "pandu"])]
+            elif d == "pune":
+                result = [r for r in result if r.get("district", "").lower() == "pune" or r.get("id", "").startswith("RZ_PUN") or any(k in r["name"].lower() for k in ["malin", "ambegaon"])]
+            elif d == "raigad":
+                result = [r for r in result if r.get("district", "").lower() == "raigad" or any(k in r["name"].lower() for k in ["taliye", "varandha", "savitri", "mahad"])]
+            else:
+                result = [r for r in result if d in r.get("district", "").lower() or d in r["name"].lower()]
         return result
 
     # ==========================================================================
@@ -629,13 +691,14 @@ class DataRepository:
     # ==========================================================================
     def get_risk_analytics(self, district: Optional[str] = None) -> Dict[str, Any]:
         """Retrieve statistical risk distributions and factor contributions."""
+        clean_dist = _normalize_district(district)
         if self.is_db_enabled:
             try:
                 engine = get_engine()
                 with Session(engine) as session:
                     stmt = select(Habitation)
-                    if district and district.lower() != "all":
-                        stmt = stmt.where(Habitation.district_name.ilike(f"%{district}%"))
+                    if clean_dist:
+                        stmt = stmt.where(Habitation.district_name.ilike(f"%{clean_dist}%"))
                     habs = session.scalars(stmt).all()
 
                     tier_colors = {
@@ -686,6 +749,155 @@ class DataRepository:
             "sites": matched_sites,
             "redZones": matched_zones,
         }
+
+    # ==========================================================================
+    # 9. Ingestion & Observations Layer (Data Provenance & Spatial Features)
+    # ==========================================================================
+    def get_data_sources(self) -> List[Dict[str, Any]]:
+        """Retrieve registered authoritative external data sources."""
+        if self.is_db_enabled:
+            try:
+                engine = get_engine()
+                with Session(engine) as session:
+                    sources = session.scalars(select(DataSource).order_by(DataSource.id)).all()
+                    return [
+                        {
+                            "id": s.id,
+                            "name": s.name,
+                            "category": s.category,
+                            "cadence": s.cadence,
+                            "endpointUrl": s.endpoint_url,
+                            "isActive": s.is_active,
+                            "lastSyncAt": s.last_sync_at.isoformat() if s.last_sync_at else None,
+                            "lastSyncStatus": s.last_sync_status or "Never Synced",
+                        }
+                        for s in sources
+                    ]
+            except Exception as exc:
+                logger.warning("Supabase data_sources query failed: %s", exc)
+        return []
+
+    def get_weather_observations(self, district: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """Retrieve latest meteorological observations with spatial coordinates."""
+        clean_dist = _normalize_district(district)
+        if self.is_db_enabled:
+            try:
+                engine = get_engine()
+                with Session(engine) as session:
+                    stmt = select(WeatherObservation)
+                    if clean_dist:
+                        stmt = stmt.where(WeatherObservation.district_name.ilike(f"%{clean_dist}%"))
+                    stmt = stmt.order_by(WeatherObservation.observed_at.desc()).limit(limit)
+                    obs = session.scalars(stmt).all()
+                    result = []
+                    for o in obs:
+                        coords = None
+                        if o.geom is not None:
+                            pt = to_shape(o.geom)
+                            coords = [float(pt.y), float(pt.x)]
+                        result.append({
+                            "id": o.id,
+                            "sourceId": o.source_id,
+                            "district": o.district_name,
+                            "stationId": o.station_id,
+                            "stationName": o.station_name,
+                            "temperatureC": o.temperature_c,
+                            "humidityPercent": o.humidity_percent,
+                            "windSpeedKmh": o.wind_speed_kmh,
+                            "weatherCondition": o.weather_condition,
+                            "warningLevel": o.warning_level,
+                            "warningText": o.warning_text,
+                            "observedAt": o.observed_at.isoformat() if o.observed_at else None,
+                            "ingestedAt": o.ingested_at.isoformat() if o.ingested_at else None,
+                            "isFallback": o.is_fallback,
+                            "coordinates": coords,
+                        })
+                    return result
+            except Exception as exc:
+                logger.warning("Supabase weather_observations query failed: %s", exc)
+        return []
+
+    def get_rainfall_observations(self, district: Optional[str] = None, limit: int = 50) -> List[Dict[str, Any]]:
+        """Retrieve latest hyetometric rainfall observations and anomaly metrics."""
+        clean_dist = _normalize_district(district)
+        if self.is_db_enabled:
+            try:
+                engine = get_engine()
+                with Session(engine) as session:
+                    stmt = select(RainfallObservation)
+                    if clean_dist:
+                        stmt = stmt.where(RainfallObservation.district_name.ilike(f"%{clean_dist}%"))
+                    stmt = stmt.order_by(RainfallObservation.observed_at.desc()).limit(limit)
+                    obs = session.scalars(stmt).all()
+                    result = []
+                    for o in obs:
+                        coords = None
+                        if o.geom is not None:
+                            pt = to_shape(o.geom)
+                            coords = [float(pt.y), float(pt.x)]
+                        result.append({
+                            "id": o.id,
+                            "sourceId": o.source_id,
+                            "district": o.district_name,
+                            "stationId": o.station_id,
+                            "stationName": o.station_name,
+                            "rainfall24hMm": o.rainfall_24h_mm,
+                            "rainfall72hMm": o.rainfall_72h_mm,
+                            "rainfallAnomalyPercent": o.rainfall_anomaly_percent,
+                            "observedAt": o.observed_at.isoformat() if o.observed_at else None,
+                            "ingestedAt": o.ingested_at.isoformat() if o.ingested_at else None,
+                            "isFallback": o.is_fallback,
+                            "coordinates": coords,
+                        })
+                    return result
+            except Exception as exc:
+                logger.warning("Supabase rainfall_observations query failed: %s", exc)
+        return []
+
+    def get_infrastructure_features(
+        self,
+        district: Optional[str] = None,
+        feature_type: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        """Retrieve geospatial infrastructure features (hospitals, schools, roads, waterways)."""
+        clean_dist = _normalize_district(district)
+        if self.is_db_enabled:
+            try:
+                engine = get_engine()
+                with Session(engine) as session:
+                    stmt = select(InfrastructureFeature)
+                    if clean_dist:
+                        stmt = stmt.where(InfrastructureFeature.district_name.ilike(f"%{clean_dist}%"))
+                    if feature_type and feature_type.lower() != "all":
+                        stmt = stmt.where(InfrastructureFeature.feature_type == feature_type.lower())
+                    stmt = stmt.limit(limit)
+                    feats = session.scalars(stmt).all()
+                    result = []
+                    for f in feats:
+                        coords = None
+                        if f.geom is not None:
+                            shp = to_shape(f.geom)
+                            if shp.geom_type == "Point":
+                                coords = [float(shp.y), float(shp.x)]
+                            elif shp.geom_type == "LineString":
+                                coords = [[float(c[1]), float(c[0])] for c in shp.coords]
+                        result.append({
+                            "id": f.id,
+                            "sourceId": f.source_id,
+                            "featureType": f.feature_type,
+                            "name": f.name,
+                            "district": f.district_name,
+                            "capacityOrBeds": f.capacity_or_beds,
+                            "allWeatherAccess": f.all_weather_access,
+                            "properties": f.properties_json or {},
+                            "coordinates": coords,
+                            "isFallback": f.is_fallback,
+                        })
+                    return result
+            except Exception as exc:
+                logger.warning("Supabase infrastructure_features query failed: %s", exc)
+        return []
 
 
 # Global repository instance

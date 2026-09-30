@@ -120,6 +120,12 @@ class CapacityMetrics(BaseModel):
     potableWaterDailySuppliedKl: float
     hospitalBedsRequired: int
     hospitalBedsAvailable: int
+    grossCapacity: Optional[int] = None
+    feasibleCapacity: Optional[int] = None
+    limitingFactor: Optional[str] = None
+    landCapacity: Optional[int] = None
+    waterCapacity: Optional[int] = None
+    healthCapacity: Optional[int] = None
 
 
 class CandidateSiteResponse(BaseModel):
@@ -150,7 +156,7 @@ class CandidateSiteResponse(BaseModel):
 
 
 # ==============================================================================
-# 5. Red Zone Schemas
+# 5. Red Zone & Safe Zone Schemas
 # ==============================================================================
 
 class RedZoneResponse(BaseModel):
@@ -164,6 +170,49 @@ class RedZoneResponse(BaseModel):
     bufferMarginM: float
     primaryTrigger: str
     coordinates: List[List[float]] = Field(..., description="Polygon boundary ring coordinates [[lat, lng], ...]")
+    isFallback: Optional[bool] = False
+    calculationMode: Optional[str] = "DATABASE_VERIFIED"
+    dataTimestamp: Optional[str] = None
+
+
+class SafeZoneProperties(BaseModel):
+    id: str
+    name: str
+    district: str
+    usableAreaAcres: float
+    usableAreaSqm: float
+    estimatedCapacity: int
+    feasibleCapacity: Optional[int] = None
+    grossCapacity: int
+    utilization: Optional[float] = None
+    limitingFactor: str
+    slopeDegree: float
+    suitabilityScore: float
+    nearestRoadDistanceM: float
+    nearestHazardDistanceM: float
+    derivationCriteria: str
+    provenance: str
+    isFallback: bool
+
+
+class SafeZoneFeature(BaseModel):
+    type: str = "Feature"
+    geometry: Dict[str, Any]
+    properties: SafeZoneProperties
+
+
+class SafeZoneMetadata(BaseModel):
+    totalSafeZones: int
+    district: Optional[str] = None
+    calculationMode: str
+    fallbackUsed: bool
+    statusMessage: str
+
+
+class SafeZoneCollectionResponse(BaseModel):
+    type: str = "FeatureCollection"
+    features: List[SafeZoneFeature]
+    metadata: SafeZoneMetadata
 
 
 # ==============================================================================
@@ -263,3 +312,65 @@ class ErrorResponse(BaseModel):
     code: str
     message: str
     details: Optional[Any] = None
+
+
+# ==============================================================================
+# 12. Data Ingestion & Provenance Schemas
+# ==============================================================================
+
+class DataSourceInfo(BaseModel):
+    id: str
+    name: str
+    category: str
+    cadence: str
+    endpointUrl: Optional[str] = None
+    isActive: bool
+    lastSyncAt: Optional[str] = None
+    lastSyncStatus: str
+    provenanceClassification: str
+
+
+class IngestionSummaryMetrics(BaseModel):
+    weatherObservationsCount: int
+    rainfallObservationsCount: int
+    infrastructureFeaturesCount: int
+
+
+class IngestionRunSummary(BaseModel):
+    id: str
+    sourceId: str
+    status: str
+    recordsIngested: int
+    recordsUpdated: int
+    recordsFailed: int
+    startedAt: Optional[str] = None
+    completedAt: Optional[str] = None
+    errorSummary: Optional[str] = None
+
+
+class IngestionStatusResponse(BaseModel):
+    status: str
+    databaseConnected: bool
+    dataProvenanceMode: str
+    summary: IngestionSummaryMetrics
+    sources: List[DataSourceInfo]
+    recentRuns: List[IngestionRunSummary]
+
+
+class SyncResponse(BaseModel):
+    run_id: str
+    source: str
+    status: str
+    records_ingested: int
+    records_updated: int
+    records_failed: int
+    error_summary: Optional[str] = None
+    completed_at: str
+
+
+class SyncImdRequest(BaseModel):
+    district: Optional[str] = Field(None, description="Optional target district to filter observations")
+
+
+class SyncOsmRequest(BaseModel):
+    bbox: Optional[List[float]] = Field(None, description="Optional bounding box [min_lat, min_lon, max_lat, max_lon]")

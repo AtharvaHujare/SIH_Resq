@@ -73,8 +73,8 @@ export default function Sidebar({
           <div className="engine-status-card">
             <div className="status-pulse-dot" />
             <div className="engine-status-text">
-              <span className="status-title">GIS AI Engine Online</span>
-              <span className="status-desc">Copernicus 30m • GPM Active</span>
+              <span className="status-title">RESQ Engine Online</span>
+              <span className="status-desc">PostGIS + deterministic rules</span>
             </div>
           </div>
         )}

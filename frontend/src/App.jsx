@@ -17,7 +17,7 @@ import GlobalSearchModal from './components/common/GlobalSearchModal';
 export default function App() {
   // Navigation & View State
   const [activePage, setActivePage] = useState('dashboard');
-  const [currentDistrict, setCurrentDistrict] = useState('All');
+  const [currentDistrict, setCurrentDistrict] = useState('Guwahati');
 
   // Modal / Selection State
   const [selectedHabitation, setSelectedHabitation] = useState(null);
@@ -74,6 +74,8 @@ export default function App() {
         <main className="app-main">
           {activePage === 'dashboard' && (
             <Dashboard
+              currentDistrict={currentDistrict}
+              onDistrictChange={setCurrentDistrict}
               onSelectHabitation={handleSelectHabitation}
               onSelectSite={handleSelectSite}
               onNavigate={setActivePage}

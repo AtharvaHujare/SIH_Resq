@@ -16,16 +16,30 @@ import {
 
 const BASE_URL = 'http://127.0.0.1:8000/api/v1';
 const REQUEST_TIMEOUT_MS = 5000;
+const apiCache = new Map();
+const DEFAULT_TTL_MS = 120000; // 2 minutes
 
 /**
- * Robust fetch wrapper with timeout, status checking, and automatic fallback.
+ * Robust fetch wrapper with in-memory caching, timeout, status checking, and automatic fallback.
  */
-async function fetchWithFallback(endpoint, options = {}, fallbackData) {
+async function fetchWithFallback(endpoint, options = {}, fallbackData, customTtl = null) {
+  const method = (options.method || 'GET').toUpperCase();
+  const url = `${BASE_URL}${endpoint}`;
+  const ttl = customTtl !== null ? customTtl : DEFAULT_TTL_MS;
+  const isWeatherEndpoint = endpoint.startsWith('/weather');
+
+  // Serve from in-memory cache for GET requests (excluding weather to ensure 100% fresh telemetry on Analyze City)
+  if (method === 'GET' && !isWeatherEndpoint && customTtl !== 0) {
+    const cached = apiCache.get(url);
+    if (cached && Date.now() - cached.timestamp < cached.ttl) {
+      return cached.data;
+    }
+  }
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const url = `${BASE_URL}${endpoint}`;
     const response = await fetch(url, {
       ...options,
       signal: controller.signal,
@@ -39,11 +53,14 @@ async function fetchWithFallback(endpoint, options = {}, fallbackData) {
     clearTimeout(timeoutId);
 
     if (!response.ok) {
-      console.warn(`[API Warning] ${options.method || 'GET'} ${url} responded with HTTP ${response.status}. Using fallback.`);
+      console.warn(`[API Warning] ${method} ${url} responded with HTTP ${response.status}. Using fallback.`);
       return typeof fallbackData === 'function' ? fallbackData() : fallbackData;
     }
 
     const data = await response.json();
+    if (method === 'GET' && !isWeatherEndpoint && customTtl !== 0) {
+      apiCache.set(url, { data, timestamp: Date.now(), ttl });
+    }
     return data;
   } catch (err) {
     clearTimeout(timeoutId);
@@ -53,6 +70,97 @@ async function fetchWithFallback(endpoint, options = {}, fallbackData) {
 }
 
 export const api = {
+  // 0. Real-World Weather & Rainfall Telemetry from Open-Meteo API (Always Fresh, No Stale Cache)
+  async getWeather(district = 'Guwahati') {
+    const cleanDist = district && district !== 'All' ? district : 'Guwahati';
+    return fetchWithFallback(
+      `/weather?city=${encodeURIComponent(cleanDist)}&_t=${Date.now()}`,
+      { method: 'GET' },
+      () => {
+        const nowTs = new Date().toISOString().slice(0, 16);
+        const fallbacks = {
+          guwahati: {
+            city: 'Guwahati',
+            district: 'Guwahati',
+            temperatureC: 28.4,
+            precipitationMm: 0.0,
+            rainMm: 0.0,
+            humidityPercent: 86,
+            windSpeedKmh: 18.0,
+            weatherCode: 63,
+            weatherCondition: 'Moderate Rain',
+            observedAt: nowTs,
+            observed_at: nowTs,
+            source: 'Prototype Baseline',
+            provenance: 'Weather unavailable — Prototype / Demo fallback',
+            isFallback: true,
+            attribution: 'Weather data by Open-Meteo.com'
+          },
+          pune: {
+            city: 'Pune',
+            district: 'Pune',
+            temperatureC: 24.2,
+            precipitationMm: 0.0,
+            rainMm: 0.0,
+            humidityPercent: 78,
+            windSpeedKmh: 22.5,
+            weatherCode: 3,
+            weatherCondition: 'Overcast',
+            observedAt: nowTs,
+            observed_at: nowTs,
+            source: 'Prototype Baseline',
+            provenance: 'Weather unavailable — Prototype / Demo fallback',
+            isFallback: true,
+            attribution: 'Weather data by Open-Meteo.com'
+          },
+          raigad: {
+            city: 'Raigad',
+            district: 'Raigad',
+            temperatureC: 26.5,
+            precipitationMm: 0.0,
+            rainMm: 0.0,
+            humidityPercent: 92,
+            windSpeedKmh: 26.0,
+            weatherCode: 65,
+            weatherCondition: 'Heavy Rain',
+            observedAt: nowTs,
+            observed_at: nowTs,
+            source: 'Prototype Baseline',
+            provenance: 'Weather unavailable — Prototype / Demo fallback',
+            isFallback: true,
+            attribution: 'Weather data by Open-Meteo.com'
+          }
+        };
+        const key = cleanDist.toLowerCase().includes('pune') ? 'pune' : cleanDist.toLowerCase().includes('raigad') ? 'raigad' : 'guwahati';
+        return fallbacks[key];
+      },
+      0 // 0 TTL disables caching for weather so each city analysis is 100% fresh
+    );
+  },
+
+  // 0b. Real-World Road Evacuation Route from OSRM Engine
+  async getRoadRoute(fromLat, fromLon, toLat, toLon) {
+    const params = new URLSearchParams({
+      from_lat: String(fromLat),
+      from_lon: String(fromLon),
+      to_lat: String(toLat),
+      to_lon: String(toLon),
+    });
+    return fetchWithFallback(
+      `/routing/route?${params.toString()}`,
+      { method: 'GET' },
+      () => ({
+        status: 'fallback',
+        source: 'OSRM/OpenStreetMap',
+        distance_km: 16.93,
+        distanceKm: 16.93,
+        duration_minutes: 26.0,
+        durationMinutes: 26.0,
+        geometry: null,
+      })
+    );
+  },
+
   // 1. Headline KPI Summary Metrics
   async getKPIs(district = null) {
     const query = district && district !== 'All' ? `?district=${encodeURIComponent(district)}` : '';
@@ -190,6 +298,41 @@ export const api = {
       `/hazards/red-zones${query}`,
       { method: 'GET' },
       () => [...RED_ZONES]
+    );
+  },
+
+  // 6b. Dynamic Green / Safe Zones (GeoJSON FeatureCollection)
+  async getSafeZones(district = null) {
+    const query = district && district !== 'All' ? `?district=${encodeURIComponent(district)}` : '';
+    return fetchWithFallback(
+      `/hazards/safe-zones${query}`,
+      { method: 'GET' },
+      () => ({
+        type: 'FeatureCollection',
+        features: [],
+        metadata: {
+          totalSafeZones: 0,
+          district: district || 'All',
+          calculationMode: 'PROTOTYPE_FALLBACK',
+          fallbackUsed: true,
+          statusMessage: 'Prototype fallback active'
+        }
+      })
+    );
+  },
+
+  // 6c. Authoritative Ingestion & Provenance Status
+  async getIngestionStatus() {
+    return fetchWithFallback(
+      '/ingestion/status',
+      { method: 'GET' },
+      () => ({
+        status: 'operational',
+        databaseConnected: false,
+        dataProvenanceMode: 'IN_MEMORY_PROTOTYPE_FALLBACK',
+        summary: { weatherObservationsCount: 0, rainfallObservationsCount: 0, infrastructureFeaturesCount: 0 },
+        sources: []
+      })
     );
   },
 

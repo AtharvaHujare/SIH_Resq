@@ -67,6 +67,16 @@ class Settings(BaseSettings):
     DEFAULT_STORAGE_CRS: str = "EPSG:4326"
     DEFAULT_PROJECTED_CRS: str = "EPSG:32643"
 
+    # External Data Sources & Ingestion Configuration
+    IMD_API_URL: str = "https://mausam.imd.gov.in/api"
+    IMD_API_KEY: Optional[str] = None
+    OVERPASS_API_URL: str = "https://overpass-api.de/api/interpreter"
+    BHUVAN_WMS_URL: str = "https://bhuvan-vec1.nrsc.gov.in/bhuvan/wms"
+    ELEVATION_API_URL: str = "https://api.open-elevation.com/api/v1/lookup"
+    ELEVATION_API_KEY: Optional[str] = None
+    INGESTION_TIMEOUT_SECONDS: int = 15
+    DEFAULT_BUFFER_METERS: float = 300.0
+
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def assemble_database_url(cls, v: Optional[str]) -> Optional[str]:

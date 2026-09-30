@@ -10,6 +10,8 @@ from sqlalchemy import (
     DateTime,
     Text,
     Index,
+    JSON,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import declarative_base, relationship
 from geoalchemy2 import Geometry
@@ -195,6 +197,130 @@ class SystemAlert(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class DataSource(Base):
+    """Registry of authoritative external data sources and ingestors."""
+    __tablename__ = "data_sources"
+
+    id = Column(String(50), primary_key=True)  # e.g., 'IMD', 'OSM_OVERPASS', 'BHUVAN_NRSC', 'OPEN_ELEVATION'
+    name = Column(String(150), nullable=False)
+    category = Column(String(50), nullable=False)  # 'weather', 'geospatial', 'elevation', 'demographics', 'hazard'
+    cadence = Column(String(50), nullable=False, default="on_demand")  # 'periodic', 'near_real_time', 'on_demand', 'static', 'wms'
+    endpoint_url = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True, nullable=False)
+    last_sync_at = Column(DateTime, nullable=True)
+    last_sync_status = Column(String(50), nullable=True)
+    metadata_json = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    ingestion_runs = relationship("DataIngestionRun", back_populates="source", cascade="all, delete-orphan")
+
+
+class DataIngestionRun(Base):
+    """Audit ledger for external API sync operations and batch runs."""
+    __tablename__ = "data_ingestion_runs"
+
+    id = Column(String(60), primary_key=True)  # UUID string
+    source_id = Column(String(50), ForeignKey("data_sources.id", ondelete="CASCADE"), nullable=False)
+    status = Column(String(30), nullable=False, default="running")  # 'running', 'completed', 'partial', 'failed'
+    records_ingested = Column(Integer, default=0, nullable=False)
+    records_updated = Column(Integer, default=0, nullable=False)
+    records_failed = Column(Integer, default=0, nullable=False)
+    error_log = Column(Text, nullable=True)
+    started_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    source = relationship("DataSource", back_populates="ingestion_runs")
+
+
+class WeatherObservation(Base):
+    """Meteorological telemetry ingested from IMD or local AWS stations."""
+    __tablename__ = "weather_observations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_id = Column(String(50), ForeignKey("data_sources.id"), nullable=False)
+    district_name = Column(String(100), nullable=False)
+    station_id = Column(String(50), nullable=False)
+    station_name = Column(String(150), nullable=True)
+    temperature_c = Column(Float, nullable=True)
+    humidity_percent = Column(Float, nullable=True)
+    wind_speed_kmh = Column(Float, nullable=True)
+    weather_condition = Column(String(100), nullable=True)
+    warning_level = Column(String(50), default="Green", nullable=False)  # 'Green', 'Yellow', 'Orange', 'Red'
+    warning_text = Column(Text, nullable=True)
+    observed_at = Column(DateTime, nullable=False)
+    ingested_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_fallback = Column(Boolean, default=False, nullable=False)
+
+    geom = Column(Geometry(geometry_type="POINT", srid=4326, spatial_index=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("station_id", "observed_at", name="uq_weather_station_observed"),
+    )
+
+
+class RainfallObservation(Base):
+    """Hyetometric rainfall observations and anomaly metrics (IMD)."""
+    __tablename__ = "rainfall_observations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    source_id = Column(String(50), ForeignKey("data_sources.id"), nullable=False)
+    district_name = Column(String(100), nullable=False)
+    station_id = Column(String(50), nullable=False)
+    station_name = Column(String(150), nullable=True)
+    rainfall_24h_mm = Column(Float, default=0.0, nullable=False)
+    rainfall_72h_mm = Column(Float, default=0.0, nullable=False)
+    rainfall_anomaly_percent = Column(Float, default=0.0, nullable=False)
+    observed_at = Column(DateTime, nullable=False)
+    ingested_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_fallback = Column(Boolean, default=False, nullable=False)
+
+    geom = Column(Geometry(geometry_type="POINT", srid=4326, spatial_index=True), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("station_id", "observed_at", name="uq_rainfall_station_observed"),
+    )
+
+
+class HazardEvent(Base):
+    """Dynamic observed natural hazard event (landslide slip, flash flood, cloudburst)."""
+    __tablename__ = "hazard_events"
+
+    id = Column(String(60), primary_key=True)
+    source_id = Column(String(50), ForeignKey("data_sources.id"), nullable=False)
+    district_name = Column(String(100), nullable=False)
+    hazard_type = Column(String(100), nullable=False)  # 'landslide', 'flash_flood', 'cloudburst'
+    severity = Column(String(50), default="High", nullable=False)
+    trigger_description = Column(Text, nullable=True)
+    affected_radius_m = Column(Float, default=500.0, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    observed_at = Column(DateTime, nullable=False)
+    valid_until = Column(DateTime, nullable=True)
+    ingested_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_fallback = Column(Boolean, default=False, nullable=False)
+
+    geom = Column(Geometry(geometry_type="GEOMETRY", srid=4326, spatial_index=True), nullable=True)
+
+
+class InfrastructureFeature(Base):
+    """Geospatial infrastructure asset ingested from OpenStreetMap (hospitals, schools, roads, waterways)."""
+    __tablename__ = "infrastructure_features"
+
+    id = Column(String(80), primary_key=True)  # e.g., 'osm:node:12345' or 'osm:way:67890'
+    source_id = Column(String(50), ForeignKey("data_sources.id"), nullable=False)
+    feature_type = Column(String(50), nullable=False)  # 'hospital', 'clinic', 'school', 'shelter', 'road', 'waterway'
+    name = Column(String(200), nullable=True)
+    district_name = Column(String(100), nullable=False)
+    capacity_or_beds = Column(Integer, nullable=True)
+    all_weather_access = Column(Boolean, default=True, nullable=False)
+    properties_json = Column(JSON, nullable=True)
+    geom = Column(Geometry(geometry_type="GEOMETRY", srid=4326, spatial_index=True), nullable=True)
+    ingested_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    is_fallback = Column(Boolean, default=False, nullable=False)
+
+
 # Explicit GiST Spatial Indexes & Composite Query Indexes
 Index("idx_habitations_district", Habitation.district_name)
 Index("idx_habitations_risk_tier", Habitation.risk_tier)
@@ -202,3 +328,8 @@ Index("idx_habitations_priority", Habitation.priority)
 Index("idx_sites_district", CandidateRelocationSite.district_name)
 Index("idx_sites_suitability", CandidateRelocationSite.suitability_score)
 Index("idx_alerts_read", SystemAlert.read)
+Index("idx_weather_district_obs", WeatherObservation.district_name, WeatherObservation.observed_at)
+Index("idx_rainfall_district_obs", RainfallObservation.district_name, RainfallObservation.observed_at)
+Index("idx_hazard_district_active", HazardEvent.district_name, HazardEvent.is_active)
+Index("idx_infra_type_district", InfrastructureFeature.feature_type, InfrastructureFeature.district_name)
+Index("idx_ingestion_runs_source", DataIngestionRun.source_id, DataIngestionRun.started_at)

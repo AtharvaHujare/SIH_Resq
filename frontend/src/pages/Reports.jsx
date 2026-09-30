@@ -19,7 +19,7 @@ export default function Reports() {
       id: 'REP_02',
       title: 'Statewide Multi-Hazard Risk & Red Zone Assessment',
       type: 'Macro Geospatial Summary',
-      description: 'Aggregated district summaries combining Copernicus DEM slope gradients, GPM rainfall anomalies, and WorldPop exposure metrics.',
+      description: 'Aggregated district summaries combining PostGIS slope gradients, precipitation anomalies, and spatial exposure metrics.',
       pages: '28 Pages (PDF)',
       frequency: 'Bi-Weekly Monsoon Update'
     },
